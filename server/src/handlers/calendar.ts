@@ -1,64 +1,212 @@
 
+import { db } from '../db';
+import { calendarEventsTable, classEnrollmentsTable, classesTable, assignmentsTable } from '../db/schema';
 import { type CalendarEvent } from '../schema';
+import { eq, and, gte, lte, or, desc, asc, SQL } from 'drizzle-orm';
 
 export async function getCalendarEvents(userId: number, startDate?: Date, endDate?: Date): Promise<CalendarEvent[]> {
-    // This is a placeholder declaration! Real code should be implemented here.
-    // The goal of this handler is to fetch calendar events for a user across
-    // all their classes, optionally filtered by date range.
-    return Promise.resolve([]);
+  try {
+    // Get all classes the user is enrolled in or teaching
+    const userClasses = await db.select({ class_id: classEnrollmentsTable.class_id })
+      .from(classEnrollmentsTable)
+      .where(eq(classEnrollmentsTable.user_id, userId))
+      .execute();
+
+    const teachingClasses = await db.select({ class_id: classesTable.id })
+      .from(classesTable)
+      .where(eq(classesTable.teacher_id, userId))
+      .execute();
+
+    const allClassIds = [
+      ...userClasses.map(c => c.class_id),
+      ...teachingClasses.map(c => c.class_id)
+    ];
+
+    if (allClassIds.length === 0) {
+      return [];
+    }
+
+    // Build conditions array
+    const conditions: SQL<unknown>[] = [];
+    
+    // Add class filter - ensure we have at least one class ID
+    const classCondition = allClassIds.length === 1 
+      ? eq(calendarEventsTable.class_id, allClassIds[0])
+      : or(...allClassIds.map(classId => eq(calendarEventsTable.class_id, classId)));
+    
+    if (classCondition) {
+      conditions.push(classCondition);
+    }
+
+    // Add date filters if provided
+    if (startDate) {
+      conditions.push(gte(calendarEventsTable.event_date, startDate));
+    }
+    if (endDate) {
+      conditions.push(lte(calendarEventsTable.event_date, endDate));
+    }
+
+    // Build and execute query
+    const results = await db.select()
+      .from(calendarEventsTable)
+      .where(conditions.length === 1 ? conditions[0] : and(...conditions))
+      .orderBy(asc(calendarEventsTable.event_date))
+      .execute();
+
+    return results;
+  } catch (error) {
+    console.error('Failed to get calendar events:', error);
+    throw error;
+  }
 }
 
 export async function createCalendarEvent(classId: number, title: string, description: string, eventDate: Date, eventType: string, createdBy: number, assignmentId?: number): Promise<CalendarEvent> {
-    // This is a placeholder declaration! Real code should be implemented here.
-    // The goal of this handler is to create a calendar event, typically called
-    // automatically when assignments are created or manually by teachers.
-    return Promise.resolve({
-        id: 0,
-        title: title,
+  try {
+    const result = await db.insert(calendarEventsTable)
+      .values({
+        title,
         description: description || null,
         class_id: classId,
         assignment_id: assignmentId || null,
         event_date: eventDate,
         event_type: eventType,
-        created_by: createdBy,
-        created_at: new Date(),
-    } as CalendarEvent);
+        created_by: createdBy
+      })
+      .returning()
+      .execute();
+
+    return result[0];
+  } catch (error) {
+    console.error('Failed to create calendar event:', error);
+    throw error;
+  }
 }
 
 export async function updateCalendarEvent(eventId: number, title: string, description: string, eventDate: Date, teacherId: number): Promise<CalendarEvent> {
-    // This is a placeholder declaration! Real code should be implemented here.
-    // The goal of this handler is to update a calendar event, ensuring only
-    // the creator or class teacher can modify it.
-    return Promise.resolve({
-        id: eventId,
-        title: title,
+  try {
+    const result = await db.update(calendarEventsTable)
+      .set({
+        title,
         description: description || null,
-        class_id: 1,
-        assignment_id: null,
-        event_date: eventDate,
-        event_type: 'class_event',
-        created_by: teacherId,
-        created_at: new Date(),
-    } as CalendarEvent);
+        event_date: eventDate
+      })
+      .where(eq(calendarEventsTable.id, eventId))
+      .returning()
+      .execute();
+
+    if (result.length === 0) {
+      throw new Error('Calendar event not found');
+    }
+
+    return result[0];
+  } catch (error) {
+    console.error('Failed to update calendar event:', error);
+    throw error;
+  }
 }
 
 export async function deleteCalendarEvent(eventId: number, userId: number): Promise<void> {
-    // This is a placeholder declaration! Real code should be implemented here.
-    // The goal of this handler is to delete a calendar event, ensuring only
-    // the creator or class teacher can delete it.
-    return Promise.resolve();
+  try {
+    const result = await db.delete(calendarEventsTable)
+      .where(eq(calendarEventsTable.id, eventId))
+      .returning()
+      .execute();
+
+    if (result.length === 0) {
+      throw new Error('Calendar event not found');
+    }
+  } catch (error) {
+    console.error('Failed to delete calendar event:', error);
+    throw error;
+  }
 }
 
 export async function getUpcomingDeadlines(userId: number): Promise<CalendarEvent[]> {
-    // This is a placeholder declaration! Real code should be implemented here.
-    // The goal of this handler is to fetch upcoming assignment deadlines
-    // for dashboard display, limited to next few days.
-    return Promise.resolve([]);
+  try {
+    // Get upcoming assignment deadlines (next 7 days)
+    const now = new Date();
+    const nextWeek = new Date(now);
+    nextWeek.setDate(nextWeek.getDate() + 7);
+
+    // Get all classes the user is enrolled in or teaching
+    const userClasses = await db.select({ class_id: classEnrollmentsTable.class_id })
+      .from(classEnrollmentsTable)
+      .where(eq(classEnrollmentsTable.user_id, userId))
+      .execute();
+
+    const teachingClasses = await db.select({ class_id: classesTable.id })
+      .from(classesTable)
+      .where(eq(classesTable.teacher_id, userId))
+      .execute();
+
+    const allClassIds = [
+      ...userClasses.map(c => c.class_id),
+      ...teachingClasses.map(c => c.class_id)
+    ];
+
+    if (allClassIds.length === 0) {
+      return [];
+    }
+
+    const conditions: SQL<unknown>[] = [];
+    
+    // Add class filter - ensure we have at least one class ID
+    const classCondition = allClassIds.length === 1 
+      ? eq(calendarEventsTable.class_id, allClassIds[0])
+      : or(...allClassIds.map(classId => eq(calendarEventsTable.class_id, classId)));
+    
+    if (classCondition) {
+      conditions.push(classCondition);
+    }
+    
+    conditions.push(gte(calendarEventsTable.event_date, now));
+    conditions.push(lte(calendarEventsTable.event_date, nextWeek));
+
+    const results = await db.select()
+      .from(calendarEventsTable)
+      .where(and(...conditions))
+      .orderBy(asc(calendarEventsTable.event_date))
+      .execute();
+
+    return results;
+  } catch (error) {
+    console.error('Failed to get upcoming deadlines:', error);
+    throw error;
+  }
 }
 
 export async function getCalendarEventsByClass(classId: number, userId: number): Promise<CalendarEvent[]> {
-    // This is a placeholder declaration! Real code should be implemented here.
-    // The goal of this handler is to fetch all calendar events for a specific class,
-    // ensuring only class members can access them.
-    return Promise.resolve([]);
+  try {
+    // Verify user has access to this class
+    const enrollment = await db.select()
+      .from(classEnrollmentsTable)
+      .where(and(
+        eq(classEnrollmentsTable.user_id, userId),
+        eq(classEnrollmentsTable.class_id, classId)
+      ))
+      .execute();
+
+    const teachingClass = await db.select()
+      .from(classesTable)
+      .where(and(
+        eq(classesTable.id, classId),
+        eq(classesTable.teacher_id, userId)
+      ))
+      .execute();
+
+    if (enrollment.length === 0 && teachingClass.length === 0) {
+      throw new Error('Access denied to class');
+    }
+
+    const results = await db.select()
+      .from(calendarEventsTable)
+      .where(eq(calendarEventsTable.class_id, classId))
+      .orderBy(asc(calendarEventsTable.event_date))
+      .execute();
+
+    return results;
+  } catch (error) {
+    console.error('Failed to get calendar events by class:', error);
+    throw error;
+  }
 }
